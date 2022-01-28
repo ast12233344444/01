@@ -64,4 +64,69 @@ Blockchain.prototype.proofOfWork = function(previousBlockHash, currentBlockData)
     
 }
 
+Blockchain.prototype.chainIsValid = function(checkChain){
+    for(let i = 1;i < checkChain.length;i++){
+        const hash = this.hashBlock(checkChain[i].previousBlockHash,
+                                    {transactions: checkChain[i].transactions,
+                                    index: checkChain[i].index}, checkChain[i].nonce);
+        if(hash.substring(0,4) !== "0000") return false;
+        if(checkChain[i].previousBlockHash !== checkChain[i-1].hash) return false;
+    }
+
+    if(
+        (checkChain[0].index !== 1)||
+        (checkChain[0].previousBlockHash !== "")||
+        (checkChain[0].hash !== "000000000000000000000000")||
+        (checkChain[0].transactions.length !== 0)||
+        (checkChain[0].nonce !== 0)
+    )return false;
+
+    return true;
+}
+
+Blockchain.prototype.getBlock = function(hash){
+    for(block of this.chain){
+        if(block.hash === hash) return block;
+    }
+    return null;
+} 
+
+Blockchain.prototype.getTransaction = function(transactionId){
+    for(block of this.chain){
+        for(transaction of block.transactions){
+            if(transaction.transactionId === transactionId){
+                return{
+                    transaction: transaction,
+                    block: block
+                };
+            }
+        }
+    }
+    return{
+        transaction: null,
+        block:null
+    }
+}
+
+Blockchain.prototype.getAdressData = function(address){
+    let addresstransactions = [];
+    for(block of this.chain){
+        console.log(block.index);
+        block.transactions.forEach(transaction =>{
+            if(address === transaction.sender || address === transaction.receiver) addresstransactions.push(transaction);
+        })
+    }
+
+    let balance = 0;
+    for(transaction of addresstransactions){
+        if(address === transaction.sender) balance -= transaction.amount;
+        if(address === transaction.receiver) balance += transaction.amount;
+    }
+
+    return {
+        addresstransactions: addresstransactions,
+        balance: balance
+    }
+}
+
 module.exports = Blockchain;

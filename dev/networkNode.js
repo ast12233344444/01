@@ -10,23 +10,25 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({extended: false}));
 
 const Blockchain = require("./blockchain");
-const aminacoin = new Blockchain();
+const { post } = require("request-promise");
+const req = require("express/lib/request");
+const newcoin = new Blockchain();
 
 app.get("/blockchain", function(req, res){
-    res.send(aminacoin);
+    res.send(newcoin);
 });
 
 app.post("/transaction", function(req, res){
-    const index = aminacoin.addNewTransaction(req.body.transactionObj);
+    const index = newcoin.addNewTransaction(req.body.transactionObj);
     res.json({note:"the transaction will be added to "+ index+  ". block"});
 });
 
 app.post("/transaction/broadcast", function(req, res){
-    const newTransaction = aminacoin.createNewTransaction(req.body.amount, req.body.sender, req.body.receiver);
-    aminacoin.addNewTransaction(newTransaction);
+    const newTransaction = newcoin.createNewTransaction(req.body.amount, req.body.sender, req.body.receiver);
+    newcoin.addNewTransaction(newTransaction);
 
     const requestReturns = [];
-    for(url of aminacoin.allUrls){
+    for(url of newcoin.allUrls){
         const reqOpt = {
             uri: url + "/transaction",
             method:"POST",
@@ -42,32 +44,75 @@ app.post("/transaction/broadcast", function(req, res){
 });
 
 app.get("/mine", function(req, res){
-    const previousBlockHash = aminacoin.getLastBlock().hash;
+    const previousBlockHash = newcoin.getLastBlock().hash;
     console.log("previous hash :" + previousBlockHash);
     const currentBlockData = {
-        transactions:  aminacoin.newTransactions,
-        index: aminacoin.chain.length + 1
+        transactions:  newcoin.newTransactions,
+        index: newcoin.chain.length + 1
     }
-    const nonce = aminacoin.proofOfWork(previousBlockHash, currentBlockData);
-    const hash = aminacoin.hashBlock(previousBlockHash, currentBlockData, nonce);
-    console.log("current hash: " + hash);
+    const nonce = newcoin.proofOfWork(previousBlockHash, currentBlockData);
+    const hash = newcoin.hashBlock(previousBlockHash, currentBlockData, nonce);
 
-    aminacoin.addNewTransaction(10, "00", nodeaddress);
-    const newBlock = aminacoin.newBlock(nonce, previousBlockHash, hash);
+    const newBlock = newcoin.newBlock(nonce, previousBlockHash, hash);
+    const promises = [];
+    for(url of newcoin.allUrls){
+        const reqOpt = {
+            uri : url + "/receive-new-block",
+            method: "POST",
+            body: { newBlock: newBlock},
+            json: true
+        }
 
-    res.json({
-        note: "new block mined",
-        details: newBlock
+        promises.push(rp(reqOpt));
+    }
+
+    Promise.all(promises).then(function(data){
+        const reqOpt ={
+            uri: newcoin.currentUrl + "/transaction/broadcast",
+            method: "POST",
+            body:{
+                amount:10,
+                sender:"00",
+                receiver: nodeaddress
+            },
+            json:true
+        };
+        rp(reqOpt);
+
+    }).then(function(data){
+        res.json({
+            note: "new block mined",
+            details: newBlock
+        })
     })
+});
 
+app.post("/receive-new-block", function(req, res){
+    if(req.body.newBlock.previousBlockHash == newcoin.getLastBlock().hash){
+        console.log("prev hash accepted");
+        if(req.body.newBlock.index == newcoin.chain.length + 1){
+            newcoin.chain.push(req.body.newBlock);
+            newcoin.newTransactions = [];
+            res.json({
+                note: "new block accepted",
+                newBlock: req.body.newBlock
+            });
+            return;
+        }
+    }
+    console.log("new block rejected")
+    res.json({
+        note: "new block rejected",
+        newBlock: req.body.newBlock
+    })
 });
 
 app.post("/register-and-broadcast", function(req, res){
     newNodeUrl = req.body.newNodeUrl;
-    if(aminacoin.allUrls.indexOf(newNodeUrl) == -1) aminacoin.allUrls.push(newNodeUrl);
+    if(newcoin.allUrls.indexOf(newNodeUrl) == -1) newcoin.allUrls.push(newNodeUrl);
     const allpromises = [];
 
-    for(nodeUrl of aminacoin.allUrls){
+    for(nodeUrl of newcoin.allUrls){
         const requestOptions = {
             uri : nodeUrl + "/register-node",
             method:"POST",
@@ -80,12 +125,11 @@ app.post("/register-and-broadcast", function(req, res){
         allpromises.push(rp(requestOptions));
     }
     Promise.all(allpromises).then(function(data){
-        //....
         const bulkRegisterOptions = {
             uri: newNodeUrl + "/register-nodes-bulk",
             method: "POST",
             body:{
-                allNetworkNodes: [...aminacoin.allUrls , aminacoin.currentUrl]
+                allNetworkNodes: [...newcoin.allUrls , newcoin.currentUrl]
             },
             json: true
         }
@@ -102,9 +146,9 @@ app.post("/register-and-broadcast", function(req, res){
 
 app.post("/register-node", function(req, res){
     const newNodeUrl = req.body.newNodeUrl;
-    if(aminacoin.allUrls.indexOf(newNodeUrl) == -1){
-        if(aminacoin.currentUrl !== newNodeUrl){
-            aminacoin.allUrls.push(newNodeUrl);
+    if(newcoin.allUrls.indexOf(newNodeUrl) == -1){
+        if(newcoin.currentUrl !== newNodeUrl){
+            newcoin.allUrls.push(newNodeUrl);
         }
     }
     res.json({note: "new node registered succesfully"});
@@ -113,9 +157,9 @@ app.post("/register-node", function(req, res){
 app.post("/register-nodes-bulk", function(req, res){
     const allNetworkNodes = req.body.allNetworkNodes;
     for(nodeUrl of allNetworkNodes){
-        if(nodeUrl !== aminacoin.currentUrl){
-            if(aminacoin.allUrls.indexOf(nodeUrl) == -1){
-                aminacoin.allUrls.push(nodeUrl);
+        if(nodeUrl !== newcoin.currentUrl){
+            if(newcoin.allUrls.indexOf(nodeUrl) == -1){
+                newcoin.allUrls.push(nodeUrl);
             }
         }
     }
@@ -123,6 +167,63 @@ app.post("/register-nodes-bulk", function(req, res){
         note: "bulk nodes registered successfully"
     });
 });
+
+app.get("/consensus", function(req, res){
+    const reqprom = [];
+    for(url of newcoin.allUrls){
+        const reqOpt = {
+            uri: url + "/blockchain",
+            metohd: "GET",
+            json: true
+        };
+        reqprom.push(rp(reqOpt));
+    }
+
+    Promise.all(reqprom).then(function(blockchains){
+        let longestChain = newcoin.chain;
+        let newNewTransactions = null;
+
+        for(blockchain of blockchains){
+            if(blockchain.chain.length > longestChain.length){
+                longestChain = blockchain.chain;
+                newNewTransactions = blockchain.newTransactions;
+            }
+        }
+        if (!newNewTransactions || (newNewTransactions && !newcoin.chainIsValid(longestChain))){
+            res.json({
+                note: "blockchain not replaced",
+                chain: longestChain
+            })
+        }else{
+            newcoin.chain = longestChain;
+            newcoin.newTransactions = newNewTransactions;
+            res.json({
+                note: "blockchain has replaced"
+            });
+        }
+    });
+});
+
+app.get("/blockchain/:blockHash" , function(req, res){
+    const result = newcoin.getBlock(req.params.blockHash);
+    res.json({
+        block: result
+    });
+})
+
+app.get("/transaction/:transaction", function(req, res){
+    const transactionId = req.params.transaction;
+    const result = newcoin.getTransaction(transactionId);
+    res.send(result);
+})
+
+app.get("/address/:address", function(req, res){
+    const address = req.params.address;
+    const addressData = newcoin.getAdressData(address);
+    res.json({
+        addressData: addressData
+    });
+}); 
 
 
 app.listen(port, function(){
